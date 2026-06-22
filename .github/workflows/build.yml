@@ -1,0 +1,87 @@
+name: Build Final Flutter APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build:
+    name: Build Latest ZIP
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find and extract latest ZIP
+        run: |
+          echo "Searching for ZIP files..."
+          ZIP_FILE=$(ls -t *.zip 2>/dev/null | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "No ZIP file found in repository root."
+            exit 1
+          fi
+
+          echo "Latest ZIP found: $ZIP_FILE"
+          mkdir extracted_app
+          unzip -q "$ZIP_FILE" -d extracted_app
+
+          echo "Finding Flutter project..."
+          PROJECT_DIR=$(find extracted_app -name "pubspec.yaml" -exec dirname {} \; | head -n 1)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "No Flutter project found inside ZIP."
+            exit 1
+          fi
+
+          echo "Flutter project found at: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.5'
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        run: flutter pub get
+        working-directory: ${{ env.PROJECT_DIR }}
+
+      - name: Clean project
+        run: flutter clean
+        working-directory: ${{ env.PROJECT_DIR }}
+
+      - name: Pub get after clean
+        run: flutter pub get
+        working-directory: ${{ env.PROJECT_DIR }}
+
+      - name: Build release APK
+        run: flutter build apk --release --build-name=1.0.0 --build-number=1
+        working-directory: ${{ env.PROJECT_DIR }}
+
+      - name: Build release AAB
+        run: flutter build appbundle --release --build-name=1.0.0 --build-number=1
+        working-directory: ${{ env.PROJECT_DIR }}
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mehr-class-final-apk
+          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: mehr-class-final-aab
+          path: ${{ env.PROJECT_DIR }}/build/app/outputs/bundle/release/app-release.aab
