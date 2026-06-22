@@ -1,4 +1,4 @@
-name: Build Final Flutter APK
+name: Build Final Flutter APK From Latest ZIP
 
 on:
   workflow_dispatch:
@@ -9,37 +9,12 @@ on:
 
 jobs:
   build:
-    name: Build Latest ZIP
+    name: Build Final Clean Flutter App
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Find and extract latest ZIP
-        run: |
-          echo "Searching for ZIP files..."
-          ZIP_FILE=$(ls -t *.zip 2>/dev/null | head -n 1)
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "No ZIP file found in repository root."
-            exit 1
-          fi
-
-          echo "Latest ZIP found: $ZIP_FILE"
-          mkdir extracted_app
-          unzip -q "$ZIP_FILE" -d extracted_app
-
-          echo "Finding Flutter project..."
-          PROJECT_DIR=$(find extracted_app -name "pubspec.yaml" -exec dirname {} \; | head -n 1)
-
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "No Flutter project found inside ZIP."
-            exit 1
-          fi
-
-          echo "Flutter project found at: $PROJECT_DIR"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -54,34 +29,115 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Find latest ZIP and extract
+        run: |
+          echo "Searching latest ZIP..."
+
+          ZIP_FILE=$(find "$GITHUB_WORKSPACE" -maxdepth 3 -type f -name "*.zip" -printf "%T@ %p\n" | sort -nr | head -n 1 | cut -d' ' -f2-)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "No ZIP file found."
+            exit 1
+          fi
+
+          echo "Latest ZIP found:"
+          echo "$ZIP_FILE"
+
+          rm -rf "$GITHUB_WORKSPACE/extracted_app"
+          mkdir -p "$GITHUB_WORKSPACE/extracted_app"
+
+          unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/extracted_app"
+
+          PROJECT_DIR=$(find "$GITHUB_WORKSPACE/extracted_app" -name "pubspec.yaml" -exec dirname {} \; | head -n 1)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "No Flutter project found inside ZIP."
+            exit 1
+          fi
+
+          echo "Flutter project found at:"
+          echo "$PROJECT_DIR"
+
+          echo "SOURCE_PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
+
+      - name: Create clean Flutter project
+        run: |
+          echo "Creating clean Flutter project..."
+
+          rm -rf "$GITHUB_WORKSPACE/clean_flutter_app"
+
+          flutter create \
+            -t app \
+            --platforms=android \
+            --org com.manyshah \
+            "$GITHUB_WORKSPACE/clean_flutter_app"
+
+          echo "Clean Flutter project created."
+
+      - name: Copy source files into clean project
+        run: |
+          echo "Copying Flutter source files..."
+
+          rm -rf "$GITHUB_WORKSPACE/clean_flutter_app/lib"
+          cp -R "$SOURCE_PROJECT_DIR/lib" "$GITHUB_WORKSPACE/clean_flutter_app/lib"
+
+          if [ -d "$SOURCE_PROJECT_DIR/assets" ]; then
+            rm -rf "$GITHUB_WORKSPACE/clean_flutter_app/assets"
+            cp -R "$SOURCE_PROJECT_DIR/assets" "$GITHUB_WORKSPACE/clean_flutter_app/assets"
+          fi
+
+          cp "$SOURCE_PROJECT_DIR/pubspec.yaml" "$GITHUB_WORKSPACE/clean_flutter_app/pubspec.yaml"
+
+          if [ -f "$SOURCE_PROJECT_DIR/pubspec.lock" ]; then
+            cp "$SOURCE_PROJECT_DIR/pubspec.lock" "$GITHUB_WORKSPACE/clean_flutter_app/pubspec.lock"
+          fi
+
+          if [ -f "$SOURCE_PROJECT_DIR/analysis_options.yaml" ]; then
+            cp "$SOURCE_PROJECT_DIR/analysis_options.yaml" "$GITHUB_WORKSPACE/clean_flutter_app/analysis_options.yaml"
+          fi
+
+          echo "Source files copied."
+
+      - name: Force Android package name
+        run: |
+          echo "Setting Android package name..."
+
+          GRADLE_FILE="$GITHUB_WORKSPACE/clean_flutter_app/android/app/build.gradle"
+          MANIFEST_FILE="$GITHUB_WORKSPACE/clean_flutter_app/android/app/src/main/AndroidManifest.xml"
+
+          if [ -f "$GRADLE_FILE" ]; then
+            sed -i 's/applicationId ".*"/applicationId "com.manyshah.mehrclass"/g' "$GRADLE_FILE"
+            sed -i 's/namespace ".*"/namespace "com.manyshah.mehrclass"/g' "$GRADLE_FILE"
+          fi
+
+          if [ -f "$MANIFEST_FILE" ]; then
+            echo "Manifest exists."
+          fi
+
+      - name: Flutter clean
+        run: flutter clean
+        working-directory: ${{ github.workspace }}/clean_flutter_app
+
       - name: Flutter pub get
         run: flutter pub get
-        working-directory: ${{ env.PROJECT_DIR }}
-
-      - name: Clean project
-        run: flutter clean
-        working-directory: ${{ env.PROJECT_DIR }}
-
-      - name: Pub get after clean
-        run: flutter pub get
-        working-directory: ${{ env.PROJECT_DIR }}
+        working-directory: ${{ github.workspace }}/clean_flutter_app
 
       - name: Build release APK
         run: flutter build apk --release --build-name=1.0.0 --build-number=1
-        working-directory: ${{ env.PROJECT_DIR }}
+        working-directory: ${{ github.workspace }}/clean_flutter_app
 
       - name: Build release AAB
         run: flutter build appbundle --release --build-name=1.0.0 --build-number=1
-        working-directory: ${{ env.PROJECT_DIR }}
+        working-directory: ${{ github.workspace }}/clean_flutter_app
 
-      - name: Upload APK
+      - name: Upload final APK
         uses: actions/upload-artifact@v4
         with:
           name: mehr-class-final-apk
-          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-release.apk
+          path: ${{ github.workspace }}/clean_flutter_app/build/app/outputs/flutter-apk/app-release.apk
 
-      - name: Upload AAB
+      - name: Upload final AAB
         uses: actions/upload-artifact@v4
         with:
           name: mehr-class-final-aab
-          path: ${{ env.PROJECT_DIR }}/build/app/outputs/bundle/release/app-release.aab
+          path: ${{ github.workspace }}/clean_flutter_app/build/app/outputs/bundle/release/app-release.aab
